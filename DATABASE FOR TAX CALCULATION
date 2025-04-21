@@ -1,21 +1,92 @@
-CREATE TABLE Users (
-    user_id INT AUTO_INCREMENT PRIMARY KEY,
-    username VARCHAR(100) NOT NULL
+CREATE DATABASE tax_system;
+USE tax_system;
+
+CREATE TABLE tax_payers (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    ssn VARCHAR(20) UNIQUE NOT NULL,
+    address TEXT,
+    state VARCHAR(50)
 );
 
-CREATE TABLE TaskStatus (
-    status_id INT AUTO_INCREMENT PRIMARY KEY,
-    status_name ENUM('To Do', 'In Progress', 'Completed') NOT NULL UNIQUE
+CREATE TABLE income_sources (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    taxpayer_id INT,
+    income_type ENUM('Salary', 'Business', 'Investment', 'Rental', 'Other') NOT NULL,
+    amount DECIMAL(10,2) NOT NULL,
+    FOREIGN KEY (taxpayer_id) REFERENCES tax_payers(id) ON DELETE CASCADE
 );
 
-CREATE TABLE Tasks (
-    task_id INT AUTO_INCREMENT PRIMARY KEY,
-    task_name VARCHAR(100) NOT NULL,
-    user_id INT NOT NULL,
-    status_id INT NOT NULL,
-    due_date DATE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES Users(user_id),
-    FOREIGN KEY (status_id) REFERENCES TaskStatus(status_id)
+CREATE TABLE tax_brackets (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    min_income DECIMAL(10,2) NOT NULL,
+    max_income DECIMAL(10,2),
+    tax_rate DECIMAL(5,2) NOT NULL
 );
+
+CREATE TABLE tax_calculations (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    taxpayer_id INT,
+    total_income DECIMAL(10,2),
+    tax_amount DECIMAL(10,2),
+    tax_year YEAR NOT NULL,
+    FOREIGN KEY (taxpayer_id) REFERENCES tax_payers(id) ON DELETE CASCADE
+);
+
+INSERT INTO tax_payers (name, ssn, address, state) 
+VALUES ('John Doe', '123-45-6789', '123 Main St, NY', 'New York'),
+       ('Jane Smith', '987-65-4321', '456 Elm St, CA', 'California');
+
+INSERT INTO income_sources (taxpayer_id, income_type, amount) 
+VALUES (1, 'Salary', 50000),
+       (1, 'Investment', 10000),
+       (2, 'Business', 80000),
+       (2, 'Rental', 20000);
+
+INSERT INTO tax_brackets (min_income, max_income, tax_rate) 
+VALUES (0, 10000, 10.00),
+       (10001, 40000, 15.00),
+       (40001, 80000, 20.00),
+       (80001, NULL, 25.00);
+
+DELIMITER $$
+
+CREATE PROCEDURE CalculateTax(IN taxpayer_id INT, IN tax_year YEAR)
+BEGIN
+    DECLARE total_income DECIMAL(10,2);
+    DECLARE tax_amount DECIMAL(10,2) DEFAULT 0;
+    DECLARE cur_min DECIMAL(10,2);
+    DECLARE cur_max DECIMAL(10,2);
+    DECLARE cur_rate DECIMAL(5,2);
+    DECLARE remaining_income DECIMAL(10,2);
+    DECLARE done INT DEFAULT FALSE;
+    DECLARE cur CURSOR FOR 
+        SELECT min_income, max_income, tax_rate FROM tax_brackets ORDER BY min_income;
+    DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
+
+    SELECT SUM(amount) INTO total_income FROM income_sources WHERE taxpayer_id = taxpayer_id;
+    SET remaining_income = total_income;
+
+    OPEN cur;
+
+    tax_loop: LOOP
+        FETCH cur INTO cur_min, cur_max, cur_rate;
+        IF done THEN LEAVE tax_loop; END IF;
+        IF cur_max IS NULL OR remaining_income > cur_min THEN
+            SET tax_amount = tax_amount + 
+                (LEAST(remaining_income, IFNULL(cur_max, remaining_income)) - cur_min) * (cur_rate / 100);
+        END IF;
+    END LOOP;
+
+    CLOSE cur;
+
+    INSERT INTO tax_calculations (taxpayer_id, total_income, tax_amount, tax_year)
+    VALUES (taxpayer_id, total_income, tax_amount, tax_year);
+END $$
+
+DELIMITER ;
+
+CALL CalculateTax(1, 2024);
+
+SELECT * FROM tax_calculations;
+
